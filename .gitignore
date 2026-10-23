@@ -1,0 +1,81 @@
+# ==============================================================================
+# SENSITIVE INSTITUTIONAL DATA & STUDENT PII (NEVER COMMIT)
+# ==============================================================================
+# Private institutional inputs, photos, signatures, and batch imports
+11th/
+12th/
+regnos*.txt
+ref_*.txt
+fields.csv
+*.xlsx
+*.xls
+*.csv
+*.pdf
+
+# Allow blank schema templates
+!templates/
+!templates/**
+
+# Candidate photos, signatures, and screenshot captures
+*.jpg
+*.jpeg
+*.png
+**/*-pending.png
+**/*-filled-readback.png
+**/*-save-verified.png
+
+# Audit journals, verification receipts, and student reports
+history/
+*.jsonl
+**/manifest.json
+**/report.json
+**/report.csv
+**/*_Identity_Confirmations.json
+Pending_Firebase_Updates*.json
+internal-assessment.lock
+
+# Browser automation profiles (Cookies, sessions, tokens, credentials)
+.chrome_profile*/
+*.crx
+
+# Secrets, API keys, service accounts, and environment configs
+.env
+.env.*
+*serviceAccount*.json
+credentials*.json
+*secret*
+*token*
+*.pem
+*.key
+*.pfx
+
+# Backups, scratch files, and temporary outputs
+_code_backups/
+*.tmp
+*.tmp.*
+*.bak
+*.swp
+*.log
+
+# ==============================================================================
+# PYTHON / RUNTIME / BUILD ARTIFACTS
+# ==============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# ==============================================================================
+# IDE & SYSTEM ARTIFACTS
+# ==============================================================================
+.vscode/
+.idea/
+.system_generated/
+Thumbs.db
+Desktop.ini
+desktop.ini
