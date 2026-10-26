@@ -7,9 +7,9 @@ from collections import Counter
 import hashlib,json,os,re,time
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import Select,WebDriverWait
-from .internal_assessment import Audit,RunLock,prepare_history_root,norm,number,subject_name,match_batch
+from .internal_assessment import Audit,RunLock,prepare_history_root,norm,number,subject_name,match_batch,SUBJECTS,class_key,session_key
 from .internal_assessment_postback import begin_read,wait_read
-from .internal_assessment_students_report import open_report_from_sidebar,is_report_page,read_student_report,match_student_report,write_snapshot
+from .internal_assessment_students_report import open_report_from_sidebar,is_report_page,read_student_report,match_student_report,write_snapshot,enrolled_in_subject,has_assigned_exam_roll
 
 URL='https://jkbose.jk.gov.in/utilities/auth_pages/generatePracticalMarks.aspx'
 HEADERS=['Class','Roll Number','Registration Number','Name','Subject','Given Marks','Maximum Marks','Requested On','Action']
@@ -105,6 +105,105 @@ def match_requests(plans,rows,roster_checks=None):
             elif record.get('manual_issues'):issues.extend(record['manual_issues'])
         issues=list(dict.fromkeys(issues))
         result.append(dict(request=row,eligible=not issues,reasons=issues))
+    return result
+
+APPROVAL_MODES={'excel','class_all','class_except'}
+
+def approval_confirmation_text(data):
+    scope=data['scope'];ready=sum(e['eligible'] for e in data['rows']);held=len(data['rows'])-ready
+    return (f'Approve all {ready} eligible awards in Class {scope["class"]}, session {scope["session"]}?\n'
+            f'{held} excluded or held awards will remain untouched.\n\n'
+            'This action cannot be undone by this software. It will confirm each eligible award on JKBOSE.\n'
+            'Continue only after reviewing the complete preview and the class/session.')
+
+def parse_exclusions(value):
+    """Exact paired identifiers only; never turn a partial pair into a broad skip."""
+    if isinstance(value,str):value=[line for line in value.splitlines() if line.strip()]
+    pairs=set()
+    for entry in value or []:
+        parts=re.split(r'[,;:\t ]+',entry.strip()) if isinstance(entry,str) else list(entry)
+        if len(parts)!=2:raise ValueError('Each exclusion needs registration number and nine-digit exam roll, separated by a comma.')
+        reg,exam=(str(v).strip() for v in parts)
+        if not re.fullmatch(r'[A-Za-z0-9-]+',reg) or not re.fullmatch(r'\d{9}',exam):raise ValueError('Invalid exclusion pair: use registration number and nine-digit exam roll.')
+        if any((r==reg and e!=exam) or (e==exam and r!=reg) for r,e in pairs):raise ValueError('Conflicting exclusion identities; correct both identifiers before continuing.')
+        pairs.add((reg,exam))
+    return pairs
+
+def exclusion_students(path,cls,session,school,principal):
+    """Read local fetched requests or an awards workbook for a skip-only picker."""
+    path=Path(path);result=[]
+    if path.suffix.lower()=='.json':
+        data=json.loads(path.read_text(encoding='utf-8-sig'))
+        if data.get('scope')!=dict(school=school.lower(),principal=principal.lower(),**{'class':class_key(cls)},session=session_key(session)):
+            raise ValueError('Fetched approval file belongs to a different account, class or session.')
+        result=[e['request'] for e in data.get('requests',[])]
+    else:
+        if path.suffix.lower()=='.xlsx':
+            from openpyxl import load_workbook
+            book=load_workbook(path,read_only=True,data_only=False)
+            try:
+                sheet=book['JKBOSE_Internal_Assessment'] if 'JKBOSE_Internal_Assessment' in book.sheetnames else book.active
+                rows=list(sheet.values)
+            finally:book.close()
+        elif path.suffix.lower() in {'.xls','.html'}:
+            parser=TableParser();parser.feed(path.read_text(encoding='utf-8-sig'));rows=parser.rows
+        else:raise ValueError('Choose a fetched approval report JSON or an Excel awards/requests file.')
+        if not rows:raise ValueError('Student file is empty.')
+        labels=[norm(v) for v in rows[0]]
+        def column(*names):return next((i for i,v in enumerate(labels) if v in names),None)
+        reg=column('boardregno','registrationnumber');exam=column('examrollno','rollnumber');name=column('studentname','name');cohort=column('class');sess=column('session')
+        if None in (reg,exam,name,cohort):raise ValueError('Student file needs class, registration, exam roll and name columns.')
+        for row in rows[1:]:
+            if row[cohort] is None:continue
+            if class_key(row[cohort])!=class_key(cls):continue
+            if sess is not None and session_key(row[sess])!=session_key(session):continue
+            result.append(dict(regno=str(row[reg] or '').strip(),exam_roll=str(row[exam] or '').strip(),name=str(row[name] or '')))
+    students={}
+    for row in result:
+        pair=next(iter(parse_exclusions([(row['regno'],row['exam_roll'])])))
+        if pair in students and norm(students[pair]['name'])!=norm(row['name']):raise ValueError('Conflicting names for an exclusion identity.')
+        students[pair]=dict(regno=pair[0],exam_roll=pair[1],name=row['name'])
+    parse_exclusions(list(students))
+    if not students:raise ValueError('No students for this class/session were found in the selected file.')
+    return sorted(students.values(),key=lambda r:(r['exam_roll'],r['regno']))
+
+def select_requests(plans,rows,roster_checks,*,mode,exclusions,roster,holds):
+    if not rows:return []
+    if mode=='excel':result=match_requests(plans,rows,roster_checks)
+    else:
+        result=[];by_pair={}
+        for student in roster['rows']:
+            if has_assigned_exam_roll(student):by_pair.setdefault((student['regno'],student['exam_roll']),[]).append(student)
+        for row in rows:
+            issues=[];candidates=by_pair.get((row['regno'],row['exam_roll']),[])
+            if row['subject'] not in SUBJECTS.values():issues.append('Unsupported Internal Assessment subject; manual review.')
+            if len(candidates)!=1:issues.append('Student identifiers are missing or ambiguous in the Students report.')
+            else:
+                student=candidates[0]
+                if norm(student['name'])!=norm(row['name']):issues.append('Student name differs from the paired Students report identity.')
+                if not enrolled_in_subject(student,row['subject']):issues.append('Student is not enrolled in this subject.')
+                if student['approval'].lower()!='approved' or student['exam_fee'].lower()!='paid':issues.append('Students report eligibility/fee requires manual review.')
+            try:
+                maximum=number(row['maximum']);marks=number(row['marks'])
+                if maximum<=0 or marks<maximum*number('0.4') or marks>maximum:issues.append('Present marks must be within the official maximum and at least 40%.')
+            except (ValueError,TypeError,ArithmeticError):issues.append('Marks/maximum are not valid numbers.')
+            result.append(dict(request=row,eligible=not issues,reasons=issues))
+    identities={} ; exam_owners={}
+    for r in rows:
+        identities.setdefault(r['regno'],set()).add(r['exam_roll']);exam_owners.setdefault(r['exam_roll'],set()).add(r['regno'])
+    if roster:
+        for r in roster['rows']:
+            if has_assigned_exam_roll(r):
+                identities.setdefault(r['regno'],set()).add(r['exam_roll']);exam_owners.setdefault(r['exam_roll'],set()).add(r['regno'])
+    absent={r['regno'] for r in rows if r['attendance']!='P'}
+    held={h['registration'] for h in holds}
+    for entry in result:
+        r=entry['request'];issues=entry['reasons']
+        if len(identities.get(r['regno'],set()))!=1 or len(exam_owners.get(r['exam_roll'],set()))!=1:issues.append('Conflicting registration/exam-roll ownership; manual identity review.')
+        if r['regno'] in absent or r['regno'] in held:issues.append('Student has a known absence/identity hold; manual Principal approval only in every subject.')
+        if r['attendance']!='P':issues.append('Absent or unknown attendance is never approved automatically.')
+        if (r['regno'],r['exam_roll']) in exclusions:issues.append('Excluded student: all subjects skipped by exact registration/exam-roll pair.')
+        entry['reasons']=list(dict.fromkeys(issues));entry['eligible']=not entry['reasons']
     return result
 
 class ApprovalJournal:
@@ -232,30 +331,42 @@ def tracking_receipts(root,school,cls,session):
     return approved,{key(event['request']):event['request'] for event in unresolved.values()}
 
 def run_approval(jobs,source,history_root,school_account,principal_account,*,execute=False,confirm_session=False,
-                 report_session='Auto',confirm_callback=None,stop_event=None,on_driver_ready=None,driver_factory=None,login_callback=None,report_reader=None,portal_factory=None):
+                 report_session='Auto',confirm_callback=None,stop_event=None,on_driver_ready=None,driver_factory=None,login_callback=None,report_reader=None,portal_factory=None,
+                 approval_mode='excel',exclusions=None,student_class=None,session=''):
     from ..browser import get_driver,login_only
     from .internal_assessment_policy import CohortAbsencePolicy,source_absences,apply_holds
     from .internal_assessment_browser import _stop
     school_account=school_account.lower();principal_account=principal_account.lower();accounts(school_account,principal_account)
     if not confirm_session:raise ValueError('Confirm the academic/examination session and exclusive Principal operation.')
-    plans=[j['plan'] for j in jobs]
-    if not plans or any(p is None for p in plans) or len({p.subject for p in plans})!=len(plans):raise ValueError('Choose valid distinct source subjects for Principal approval.')
-    source=Path(source).resolve(strict=True);digest=hashlib.sha256(source.read_bytes()).hexdigest();cls=plans[0].student_class;session=plans[0].session
-    if any(Path(p.source)!=source or p.source_sha256!=digest or p.student_class!=cls or p.session!=session for p in plans):raise ValueError('Principal plans do not match this source/class/session.')
+    if approval_mode not in APPROVAL_MODES:raise ValueError('Choose a valid Principal approval mode.')
+    excluded=parse_exclusions(exclusions)
+    if approval_mode=='class_except' and not excluded:raise ValueError('Add at least one excluded student pair.')
+    if approval_mode!='class_except' and excluded:raise ValueError('Exclusions are supported only in class-except mode.')
+    plans=[j['plan'] for j in jobs or []] if approval_mode=='excel' else []
+    if approval_mode=='excel':
+        if not plans or any(p is None for p in plans) or len({p.subject for p in plans})!=len(plans):raise ValueError('Choose valid distinct source subjects for Principal approval.')
+        source=Path(source).resolve(strict=True);digest=hashlib.sha256(source.read_bytes()).hexdigest();cls=plans[0].student_class;session=plans[0].session
+        if any(Path(p.source)!=source or p.source_sha256!=digest or p.student_class!=cls or p.session!=session for p in plans):raise ValueError('Principal plans do not match this source/class/session.')
+    else:
+        source=None;digest='';cls=class_key(student_class);session=session_key(session)
+        if cls not in {'10','11','12'} or not re.fullmatch(r'\d{4}-\d{2}',session):raise ValueError('Choose the class and academic session.')
     root=prepare_history_root(history_root);scope=dict(school=school_account,principal=principal_account,**{'class':cls},session=session)
     driver=None
     with RunLock(root):
-        policy=CohortAbsencePolicy(root,school_account,cls,session);current=source_absences(source,plans[0].sheet)
-        policy.add(current,origin='consolidated_source',evidence=digest);policy.reconcile_source(source,plans[0].sheet,current_holds=current)
+        policy=CohortAbsencePolicy(root,school_account,cls,session)
+        if source:
+            current=source_absences(source,plans[0].sheet)
+            policy.add(current,origin='consolidated_source',evidence=digest);policy.reconcile_source(source,plans[0].sheet,current_holds=current)
         for plan in plans:apply_holds(plan,policy.holds)
         journal=ApprovalJournal(root,scope)
         run=journal.folder/'Runs'/datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S-%f');run.mkdir(parents=True)
-        report=dict(mode='approve' if execute else 'read_only',scope=scope,source=str(source),source_sha256=digest,status='started',verified_approved=[],requests=[],unresolved=list(journal.unresolved()))
+        report=dict(approval_mode=approval_mode,exclusions=sorted(excluded),mode='approve' if execute else 'read_only',scope=scope,source=str(source) if source else '',source_sha256=digest,status='started',verified_approved=[],requests=[],unresolved=list(journal.unresolved()))
         def write():
             temp=run/'report.tmp';temp.write_text(json.dumps(report,indent=2),encoding='utf-8');os.replace(temp,run/'report.json')
             rows=['<!doctype html><meta charset="utf-8"><title>Principal Approval History</title><h1>Principal Approval History</h1>']
             from html import escape
             rows.append('<p>Outcome: '+escape(report['status'])+'. Approval is separate from submission.</p>')
+            rows.append('<p>Selection: '+escape(report['approval_mode'])+'; excluded student pairs: '+str(len(report['exclusions']))+'.</p>')
             rows.append('<p>Verified in this run: '+str(len(report['verified_approved']))+'.</p><table border="1"><tr><th>Subject</th><th>Registration</th><th>Exam roll</th><th>Name</th><th>Given / Max</th><th>Outcome / review</th></tr>')
             verified=set(report['verified_approved']);unresolved=set(report['unresolved'])
             for entry in report['requests']:
@@ -276,8 +387,10 @@ def run_approval(jobs,source,history_root,school_account,principal_account,*,exe
             (login_callback or login_only)(driver,role='principal')
             portal=(portal_factory or PrincipalPortal)(driver,run/'Downloads',cls,principal_account,stop_event)
             pending,evidence=portal.read_all();report['initial_export']=evidence
+            if any((reg==r['regno'] and exam!=r['exam_roll']) or (exam==r['exam_roll'] and reg!=r['regno']) for reg,exam in excluded for r in pending):
+                raise ValueError('An exclusion conflicts with the fetched student identifiers; correct the pair before approval.')
             active_subjects={r['subject'] for r in pending};roster_checks={};roster=None;matches=[]
-            if any(p.subject in active_subjects for p in plans):
+            if pending and (approval_mode!='excel' or any(p.subject in active_subjects for p in plans)):
                 roster=(report_reader or read_student_report)(driver,cls,principal_account,session,report_session,stop_event)
                 if roster.get('account','').lower()!=principal_account or roster.get('workbook_session')!=session:raise ValueError('Principal Students report account/session differs.')
                 report['student_report']=write_snapshot(run,roster)
@@ -286,7 +399,8 @@ def run_approval(jobs,source,history_root,school_account,principal_account,*,exe
                     matched=match_student_report(plan,roster,{'verified':set(),'manual':set()});matches.append(matched)
                     roster_checks[plan.subject]={(r['excel_registration'],r['excel_exam_roll']):r for r in matched['records'] if r['excel_registration']}
                 (run/'roster_matching.json').write_text(json.dumps(matches,indent=2),encoding='utf-8')
-            report['requests']=match_requests(plans,pending,roster_checks);report['total_pending']=len(pending);write()
+            classify=lambda queue:select_requests(plans,queue,roster_checks,mode=approval_mode,exclusions=excluded,roster=roster,holds=CohortAbsencePolicy(root,school_account,cls,session).holds)
+            report['requests']=classify(pending);report['unmatched_exclusions']=[list(pair) for pair in sorted(excluded-{(r['regno'],r['exam_roll']) for r in pending})];report['total_pending']=len(pending);write()
             uncertain=journal.unresolved()
             if uncertain and execute:raise ValueError('An earlier Principal action is uncertain. Use Principal reconciliation; never repeat a decision blindly.')
             reappeared={r['id'] for r in pending}&journal.approved()
@@ -295,26 +409,27 @@ def run_approval(jobs,source,history_root,school_account,principal_account,*,exe
                     if request['id'] in reappeared:journal.append('approval_reappeared',request=request)
                 raise ValueError('Previously verified approvals reappeared in Principal requests; reconcile before continuing.')
             eligible=[e['request'] for e in report['requests'] if e['eligible']]
-            order={plan.subject:i for i,plan in enumerate(plans)};eligible.sort(key=lambda r:order[r['subject']])
+            order={plan.subject:i for i,plan in enumerate(plans)}
+            if approval_mode=='excel':eligible.sort(key=lambda r:order[r['subject']])
             print(f'[PRINCIPAL PREVIEW] {len(eligible)} eligible; {len(report["requests"])-len(eligible)} held; {len(pending)} total pending. Principal login: {principal_account}.')
-            journal.append('approval_preview',source_sha256=digest,execute=execute,evidence=evidence,eligible=[r['id'] for r in eligible],report=str(run/'report.json'))
+            journal.append('approval_preview',approval_mode=approval_mode,exclusions=sorted(excluded),source_sha256=digest,execute=execute,evidence=evidence,eligible=[r['id'] for r in eligible],report=str(run/'report.json'))
             if not execute:report['status']='checked_read_only';return report
             if not eligible:report['status']='nothing_eligible';return report
-            if not confirm_callback or not confirm_callback(dict(scope=scope,report_session=roster['report_session'],source=str(source),rows=report['requests'])):report['status']='cancelled';return report
+            if not confirm_callback or not confirm_callback(dict(scope=scope,approval_mode=approval_mode,exclusions=sorted(excluded),report_session=roster['report_session'],source=str(source) if source else '',rows=report['requests'])):report['status']='cancelled';return report
             fresh,fresh_evidence=portal.read_all()
             if {r['id']:r for r in fresh}!={r['id']:r for r in pending}:raise ValueError('Principal queue changed after preview. No approval started; review again.')
             pending=fresh
             for request in eligible:
                 _stop(stop_event)
-                if hashlib.sha256(source.read_bytes()).hexdigest()!=digest:raise ValueError('Source workbook changed; no further approval allowed.')
+                if source and hashlib.sha256(source.read_bytes()).hexdigest()!=digest:raise ValueError('Source workbook changed; no further approval allowed.')
                 # Reuse source matching before every action, including durable class-wide holds.
                 current_policy=CohortAbsencePolicy(root,school_account,cls,session)
                 for plan in plans:apply_holds(plan,current_policy.holds)
-                if not match_requests(plans,[request],roster_checks)[0]['eligible']:raise ValueError('An approval acquired a hold after preview.')
+                if not next(e for e in classify(pending) if e['request']['id']==request['id'])['eligible']:raise ValueError('An approval acquired a hold after preview.')
                 journal.append('approval_open_attempt',request=request,source_sha256=digest,evidence=fresh_evidence)
                 portal.open_approval(request)
                 _stop(stop_event)
-                if hashlib.sha256(source.read_bytes()).hexdigest()!=digest:raise ValueError('Source changed while the Principal popup was open; confirmation not clicked.')
+                if source and hashlib.sha256(source.read_bytes()).hexdigest()!=digest:raise ValueError('Source changed while the Principal popup was open; confirmation not clicked.')
                 journal.append('approval_submit_attempt',request_id=request['id'],request=request)
                 portal.confirm(request)
                 after,proof=portal.read_all();verify_removal(pending,after,request)
@@ -331,7 +446,8 @@ def run_approval(jobs,source,history_root,school_account,principal_account,*,exe
             report['unresolved']=list(journal.unresolved());write()
             try:
                 from .internal_assessment_tracking import refresh_tracking_copy
-                report['tracking_workbook']=refresh_tracking_copy(source,root,cls,session,school_account)
+                if source:report['tracking_workbook']=refresh_tracking_copy(source,root,cls,session,school_account)
+                else:report['tracking_workbook']='Not selected in class-wide mode; approval receipts retained in Principal history.'
                 write();print('[TRACKING EXCEL] '+report['tracking_workbook'])
             except Exception as tracking_error:
                 report['tracking_error']=str(tracking_error)[:1000];write()

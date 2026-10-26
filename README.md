@@ -643,3 +643,25 @@ Skip existing Requested/Approved paired identities without retrying or claiming 
 Distinguish JKBOSE ErrorPage.html from login expiry and include only the destination path in diagnostics. Preserve bounded read completion and never retry Save automatically.
 
 Verification: 271 synthetic tests; live read-only report read 435 awards (424 Requested, 0 Approved, 11 Rejected) across 23 pages. No live mark save, approval/rejection or download was executed. Restart the tool after installation.
+
+## Principal approval modes
+
+Open Internal Assessment, select class and academic session, then choose **Principal approval**.
+
+- **Approve entire class**: no workbook or student list required. Reads the complete Principal queue and Students report, previews eligible and held awards, then processes eligible requests one by one through all pages.
+- **Approve class except selected students**: the same class-wide workflow with exact registration-number/exam-roll exclusions across every subject. Enter one `registration, exam-roll` pair per line, or select students from a fetched approval report JSON or Excel awards/requests file. Conflicting pairs stop before any decision.
+- **Approve strictly from consolidated Excel**: uses the selected original consolidated workbook and subjects. Both identifiers, subject, marks, attendance and official maximum must match the source.
+
+Complete the separate Principal login and captcha yourself. One preview lists the complete selection and hold reasons. The final warning states the class, session, eligible count and held count, and requires explicit confirmation that approval cannot be undone by this software. Cancelling does not approve anything. After confirmation, no per-student prompt is required.
+
+Absent students and existing class-wide holds remain excluded from automatic approval in every subject. Below-pass, invalid, unsupported-subject or conflicting-identity requests stay untouched. Previously approved requests are absent from the pending queue; uncertain prior actions are never retried blindly. Every verified action retains a durable Principal receipt. A workbook is refreshed only in Excel mode; class-wide mode keeps its receipts in Principal history for later tracking refresh.
+
+CLI defaults remain read-only. Class-wide example (no Excel required):
+
+```powershell
+python main.py internal-approve --approval-mode class_all --class 11 --session 2025-26 --school-account schNNNNNN --principal-account prinNNNNNN --confirm-session
+```
+
+Use `--approval-mode class_except --exclude "REGISTRATION,EXAMROLL"` for exclusions; repeat `--exclude` for more students. Strict mode uses `--approval-mode excel --excel-file "awards.xlsx" --all-subjects` or `--subjects` with the desired subjects. Only add `--execute` when an approval run is intended. The final explicit approval confirmation still applies.
+
+Restart the software after installing this update. No live Principal approval or rejection was performed during development.

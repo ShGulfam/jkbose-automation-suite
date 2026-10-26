@@ -244,19 +244,24 @@ def cmd_internal(excel_file, sheet="Auto", student_class="11", session="", subje
 # CLI (for direct / scripted use)
 # ---------------------------------------------------------------------
 
-def cmd_internal_approve(excel_file,sheet='Auto',student_class='11',session='',subjects=None,all_subjects=False,
+def cmd_internal_approve(excel_file=None,sheet='Auto',student_class='11',session='',subjects=None,all_subjects=False,
                          school_account='',principal_account='',history_dir=None,execute=False,confirm_session=False,
-                         report_session='Auto',jobs=None,confirm_callback=None,on_driver_ready=None,stop_event=None):
+                         report_session='Auto',jobs=None,confirm_callback=None,on_driver_ready=None,stop_event=None,approval_mode='excel',exclusions=None):
     from jkbose_tool.features.internal_assessment_batch import load_jobs
-    from jkbose_tool.features.internal_assessment_approval import run_approval
-    jobs=jobs or load_jobs(excel_file,sheet,student_class,session,subjects,all_subjects)
+    from jkbose_tool.features.internal_assessment_approval import run_approval,approval_confirmation_text
+    if approval_mode=='excel':
+        if not excel_file:raise ValueError('Choose the consolidated awards workbook for Excel approval mode.')
+        jobs=jobs or load_jobs(excel_file,sheet,student_class,session,subjects,all_subjects or not subjects)
+    else:jobs=[]
     if confirm_callback is None:
         def confirm_callback(data):
             for row in data['rows']:
                 r=row['request'];print(r['subject'],r['regno'],r['exam_roll'],r['name'],r['marks']+'/'+r['maximum'],'READY' if row['eligible'] else '; '.join(row['reasons']))
-            return input('Type APPROVE to approve only the exact matched awards above: ').strip()=='APPROVE'
+            print(approval_confirmation_text(data))
+            return input('Type APPROVE to confirm the irreversible software action: ').strip()=='APPROVE'
     return run_approval(jobs,excel_file,history_dir,school_account,principal_account,execute=execute,confirm_session=confirm_session,
-                        report_session=report_session,confirm_callback=confirm_callback,on_driver_ready=on_driver_ready,stop_event=stop_event)
+                        report_session=report_session,confirm_callback=confirm_callback,on_driver_ready=on_driver_ready,stop_event=stop_event,
+                        approval_mode=approval_mode,exclusions=exclusions,student_class=student_class,session=session)
 
 def build_parser():
     parser = argparse.ArgumentParser(
@@ -365,13 +370,15 @@ def build_parser():
     modes.add_argument('--execute', action='store_true', help='Allow Save only after complete batch validation and explicit confirmation.')
 
     p_approve=sub.add_parser('internal-approve',help='Principal approval: read-only by default; exact preview and --execute required for decisions.')
-    p_approve.add_argument('--excel-file',required=True);p_approve.add_argument('--sheet',default='Auto')
+    p_approve.add_argument('--excel-file');p_approve.add_argument('--sheet',default='Auto')
     p_approve.add_argument('--class',dest='student_class',choices=['10','11','12'],required=True);p_approve.add_argument('--session',required=True)
-    choose=p_approve.add_mutually_exclusive_group(required=True)
+    choose=p_approve.add_mutually_exclusive_group()
     choose.add_argument('--subjects',nargs='+');choose.add_argument('--all-subjects',action='store_true')
     p_approve.add_argument('--school-account',required=True);p_approve.add_argument('--principal-account',required=True)
     p_approve.add_argument('--history-dir',default=None);p_approve.add_argument('--report-session',default='Auto')
     p_approve.add_argument('--confirm-session',action='store_true');p_approve.add_argument('--execute',action='store_true')
+    p_approve.add_argument('--approval-mode',choices=['excel','class_all','class_except'],default='excel')
+    p_approve.add_argument('--exclude',action='append',default=[],help='Registration,exam-roll pair; repeat for multiple students in class_except mode.')
     return parser
 
 
@@ -553,7 +560,8 @@ def main():
     elif args.command == 'internal-approve':
         cmd_internal_approve(args.excel_file,sheet=args.sheet,student_class=args.student_class,session=args.session,subjects=args.subjects,
                              all_subjects=args.all_subjects,school_account=args.school_account,principal_account=args.principal_account,
-                             history_dir=args.history_dir,execute=args.execute,confirm_session=args.confirm_session,report_session=args.report_session)
+                             history_dir=args.history_dir,execute=args.execute,confirm_session=args.confirm_session,report_session=args.report_session,
+                             approval_mode=args.approval_mode,exclusions=args.exclude)
     elif args.command == "photos":
         cmd_photos(args.reg_file, args.source_dir, args.destination_dir,
                    rename_map_file=args.rename_map_file, recursive=not args.no_recursive,
