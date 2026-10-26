@@ -246,7 +246,7 @@ def cmd_internal(excel_file, sheet="Auto", student_class="11", session="", subje
 
 def cmd_internal_approve(excel_file=None,sheet='Auto',student_class='11',session='',subjects=None,all_subjects=False,
                          school_account='',principal_account='',history_dir=None,execute=False,confirm_session=False,
-                         report_session='Auto',jobs=None,confirm_callback=None,on_driver_ready=None,stop_event=None,approval_mode='excel',exclusions=None):
+                         report_session='Auto',jobs=None,confirm_callback=None,on_driver_ready=None,stop_event=None,approval_mode='excel',exclusions=None,on_progress=None):
     from jkbose_tool.features.internal_assessment_batch import load_jobs
     from jkbose_tool.features.internal_assessment_approval import run_approval,approval_confirmation_text
     if approval_mode=='excel':
@@ -261,7 +261,7 @@ def cmd_internal_approve(excel_file=None,sheet='Auto',student_class='11',session
             return input('Type APPROVE to confirm the irreversible software action: ').strip()=='APPROVE'
     return run_approval(jobs,excel_file,history_dir,school_account,principal_account,execute=execute,confirm_session=confirm_session,
                         report_session=report_session,confirm_callback=confirm_callback,on_driver_ready=on_driver_ready,stop_event=stop_event,
-                        approval_mode=approval_mode,exclusions=exclusions,student_class=student_class,session=session)
+                        approval_mode=approval_mode,exclusions=exclusions,student_class=student_class,session=session,on_progress=on_progress)
 
 def build_parser():
     parser = argparse.ArgumentParser(

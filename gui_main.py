@@ -276,6 +276,20 @@ class App(InternalAssessmentGUI):
             command=self.stop_task, state="disabled")
         self.stop_btn.pack(side="left")
 
+        self.approval_progress_frame=ttk.Frame(bar,style='Content.TFrame')
+        self.approval_progress_frame.grid(row=1,column=0,columnspan=2,sticky='ew',pady=(5,0))
+        self.approval_progress_frame.columnconfigure(0,weight=1)
+        self.approval_progress_var=tk.StringVar(value='')
+        ttk.Label(self.approval_progress_frame,textvariable=self.approval_progress_var,style='SubHeader.TLabel',wraplength=680).grid(row=0,column=0,sticky='w')
+        self.approval_progress_bar=ttk.Progressbar(self.approval_progress_frame,mode='determinate')
+        self.approval_progress_bar.grid(row=1,column=0,sticky='ew',pady=(3,0))
+        self.approval_progress_frame.grid_remove()
+
+    def _show_approval_progress(self,data):
+        self.approval_progress_frame.grid()
+        self.approval_progress_bar.configure(maximum=max(data['total_records'],1),value=data['verified'])
+        self.approval_progress_var.set(f"Class {data['student_class']} | {data['verified']}/{data['total_records']} tracked awards verified | {data['remaining']} awards remaining | {data['students_remaining']}/{data['students_total']} students pending | {data['held']} held/excluded")
+
     def _build_log_panel(self, parent):
         frame = ttk.Frame(parent, style="Content.TFrame")
         frame.pack(fill="both", expand=True, padx=16, pady=14)
@@ -817,6 +831,9 @@ class App(InternalAssessmentGUI):
     # Background task plumbing
     # ------------------------------------------------------------
     def _start_task(self, name, func, kwargs, needs_stop=False):
+        if getattr(self.current_driver, "_jkbose_keep_open", False) is True:
+            messagebox.showinfo("Browser left open", "Inspect the previous browser, then use Force Close Browser before starting another task.")
+            return
         if self.worker and self.worker.is_alive():
             messagebox.showwarning(APP_TITLE, "Another task is already running. Please wait or stop it first.")
             return
@@ -826,6 +843,7 @@ class App(InternalAssessmentGUI):
             kwargs = dict(kwargs)
             kwargs["stop_event"] = self.stop_event
 
+        self.approval_progress_frame.grid_remove()
         self._log_clear()
         self._log(f"=== Starting: {name} ===\n\n")
         self._set_running(True, name)
@@ -855,11 +873,15 @@ class App(InternalAssessmentGUI):
                     self.msg_queue.put(("status", f"{name}: failed — {brief}"))
             finally:
                 sys.stdout = old_stdout
-                self.current_driver = None
+                self._release_driver_reference()
                 self.msg_queue.put(("done", None))
 
         self.worker = threading.Thread(target=task, daemon=True)
         self.worker.start()
+
+    def _release_driver_reference(self):
+        if getattr(self.current_driver, "_jkbose_keep_open", False) is not True:
+            self.current_driver = None
 
     def _set_driver_ready(self, driver):
         self.current_driver = driver
@@ -892,6 +914,8 @@ class App(InternalAssessmentGUI):
                 self.current_driver.quit()
             except Exception:
                 pass
+            finally:
+                self.current_driver = None
 
     # ------------------------------------------------------------
     # Log panel helpers
@@ -920,6 +944,8 @@ class App(InternalAssessmentGUI):
                     self._log(payload)
                 elif kind == "status":
                     self.status_var.set(payload)
+                elif kind == "approval_progress":
+                    self._show_approval_progress(payload)
                 elif kind == "done":
                     self._set_running(False, None)
         except queue.Empty:

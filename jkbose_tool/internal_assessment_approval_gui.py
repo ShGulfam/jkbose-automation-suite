@@ -59,7 +59,7 @@ class PrincipalApprovalGUI:
                 kwargs=dict(excel_file=self.ia['file'].get() if chosen=='excel' else None,jobs=jobs,school_account=school,principal_account=principal.get().strip(),
                             student_class=self.ia['class'].get(),session=self.ia['session'].get(),approval_mode=chosen,exclusions=list(pairs),
                             history_dir=self.ia['history'].get(),report_session=self.ia['report_session'].get().strip(),execute=execute,
-                            confirm_session=True,confirm_callback=self._confirm_principal_approval,on_driver_ready=self._set_driver_ready)
+                            confirm_session=True,confirm_callback=self._confirm_principal_approval,on_driver_ready=self._set_driver_ready,on_progress=self._principal_progress)
             except Exception as error:messagebox.showerror('Principal approval',str(error),parent=top);return
             top.destroy();self._start_task('Principal Internal Assessment',cli.cmd_internal_approve,kwargs,needs_stop=True)
         actions=ttk.Frame(frame);actions.pack(fill='x',pady=8)
@@ -67,6 +67,9 @@ class PrincipalApprovalGUI:
         ttk.Button(actions,text='Preview & Approve',command=lambda:start(True)).pack(side='left')
         ttk.Button(frame,text='Reconcile uncertain approval…',command=lambda:(top.destroy(),self._reconcile_principal())).pack(anchor='w',pady=5)
         ttk.Button(frame,text='Open Principal history',command=lambda:self._open_principal_history()).pack(anchor='w',pady=5)
+
+    def _principal_progress(self,data):
+        self.msg_queue.put(('approval_progress',data))
 
     def _confirm_principal_approval(self,data):
         event=threading.Event();answer={'accepted':False};window={}

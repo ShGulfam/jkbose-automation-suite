@@ -665,3 +665,13 @@ python main.py internal-approve --approval-mode class_all --class 11 --session 2
 Use `--approval-mode class_except --exclude "REGISTRATION,EXAMROLL"` for exclusions; repeat `--exclude` for more students. Strict mode uses `--approval-mode excel --excel-file "awards.xlsx" --all-subjects` or `--subjects` with the desired subjects. Only add `--execute` when an approval run is intended. The final explicit approval confirmation still applies.
 
 Restart the software after installing this update. No live Principal approval or rejection was performed during development.
+
+## Approval progress and safe interrupted-run recovery
+
+Class-wide approval modes no longer download Excel after each award. Initial checks establish exact request identities and attendance. Each approval is bound to the selected class and exact popup request ID, requires a completed server response, an exact one-record decrease in the live class total, disappearance of the targeted student/subject, and validation of the complete displayed page. A final full-queue audit checks the remaining list. These live-page proofs are explicitly recorded separately from full exported queue proofs. Strict Excel mode retains full exported verification per award.
+
+The UI shows a determinate progress bar and separate counts for tracked award records, verified approvals, pending awards, pending students, and excluded/held awards. Previously verified receipts are included in tracked totals; approvals performed outside the local history are not invented. One student is complete only when none of that student's pending subject awards remain. Known absence, exclusion and identity holds are still respected.
+
+The read-only Download Excel control now waits for an overlapping success toast to clear; approval/rejection clicks are never automatically retried. An interrupted receipt can be recovered only from a recorded exact submit attempt and intact, complete hashed before/after exports showing that only that request was removed, with every other request unchanged. Mere absence from a queue is insufficient. Unrecoverable uncertainty holds its affected request instead of blocking unrelated eligible awards. Failed GUI runs retain the browser for inspection; use Force Close Browser before starting a new task.
+
+Restart the application to load the update. No live approval or rejection was performed during development or history repair.

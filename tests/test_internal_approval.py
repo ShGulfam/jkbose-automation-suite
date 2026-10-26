@@ -85,8 +85,8 @@ class PrincipalTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'Disconnected'):self.run_approval(portal,True)
         self.assertEqual(portal.confirms,['1']);self.assertEqual(set(self.journal().unresolved()),{'1'})
         second=FakePortal(self.rows())
-        with self.assertRaisesRegex(ValueError,'earlier Principal action is uncertain'):self.run_approval(second,True)
-        self.assertEqual(second.confirms,[])
+        result,_,_=self.run_approval(second,True)
+        self.assertEqual(result['status'],'finished_with_holds');self.assertEqual(second.confirms,['2']);self.assertEqual(set(self.journal().unresolved()),{'1'})
         journal=self.journal();journal.reconcile('1','approved','Synthetic Admin','Exact request verified Approved in the official report.')
         self.assertEqual(self.journal().unresolved(),{})
     def test_wrong_popup_target_does_not_confirm_and_keeps_uncertainty(self):

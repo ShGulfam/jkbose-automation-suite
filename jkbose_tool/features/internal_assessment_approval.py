@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 from urllib.parse import urlparse
 from collections import Counter
 import hashlib,json,os,re,time
+from selenium.common.exceptions import ElementClickInterceptedException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import Select,WebDriverWait
 from .internal_assessment import Audit,RunLock,prepare_history_root,norm,number,subject_name,match_batch,SUBJECTS,class_key,session_key
@@ -240,6 +241,43 @@ class ApprovalJournal:
         request=self.unresolved()[request_id]['request']
         self.append('manual_approval_resolution',request_id=request_id,request=request,outcome=outcome,actor=actor.strip(),note=note.strip())
 
+def reconcile_interrupted_approvals(journal,pending,evidence):
+    """Recover only a submitted request's exact single removal from hashed exports.
+
+    Pending-queue absence alone is never an approval receipt. Both complete
+    exports must belong to this journal and all unrelated requests must agree.
+    """
+    def checked_export(proof):
+        path=Path(proof['file']).resolve(strict=True)
+        if not path.is_relative_to(journal.folder.resolve()):raise ValueError('Recovery evidence is outside the Principal journal.')
+        if hashlib.sha256(path.read_bytes()).hexdigest()!=proof['sha256']:raise ValueError('Recovery export integrity failed.')
+        if proof['total']==0 and path.suffix=='.json':
+            data=json.loads(path.read_text(encoding='utf-8'));validate_grid(data,journal.scope['class'],journal.scope['principal'])
+            if data['total']!='0':raise ValueError('Recovery empty-queue evidence is not empty.')
+            return []
+        return parse_export(path,journal.scope['class'],proof['total'])
+    recovered=[]
+    unresolved=journal.unresolved()
+    if not unresolved:return recovered
+    try:
+        after=checked_export(evidence)
+        if {r['id']:r for r in after}!={r['id']:r for r in pending}:return recovered
+    except (ValueError,OSError,KeyError,TypeError):return recovered
+    for request_id,event in list(unresolved.items()):
+        request=event['request'];start=next(i for i,e in enumerate(journal.events)if e['hash']==event['hash'])
+        attempted=any(e['kind']=='approval_submit_attempt' and e.get('request_id')==request_id and e.get('request')==request for e in journal.events[start+1:])
+        if not attempted:continue
+        try:
+            before=checked_export(event['evidence'])
+            if next((r for r in before if r['id']==request_id),None)!=request:continue
+            verify_removal(before,after,request)
+        except (ValueError,OSError,KeyError,TypeError):continue
+        journal.append('approval_verified',request_id=request_id,request=request,source_sha256=event.get('source_sha256',''),evidence=evidence,
+                       verification='Recovered interrupted verification: prior exact request-bound submit attempt, hashed complete before/after exports, only that exact request removed; every other request unchanged. Not an independent Approved-status report.',
+                       recovered=True,before_evidence=event['evidence'])
+        recovered.append(request_id)
+    return recovered
+
 class PrincipalPortal:
     def __init__(self,driver,folder,cls,principal,stop_event=None):
         self.driver=driver;self.folder=Path(folder);self.cls=cls;self.principal=principal;self.stop_event=stop_event
@@ -267,6 +305,19 @@ class PrincipalPortal:
         data=self.snapshot()
         if data['page']!=[str(n)]:raise ValueError('Principal pager did not reach the requested page.')
         return data
+    def click_download(self,expected):
+        # Only this read-only control is retried. Approval/rejection clicks are
+        # never retried. JKBOSE's success toast can cover the bottom-right button.
+        def ready(driver):
+            self.stop();current=self.snapshot()
+            if current['total']!=expected['total'] or current['approve_visible'] or current['reject_visible']:
+                raise ValueError('Principal queue/popup changed before the read-only export.')
+            button=driver.find_element(By.ID,'bodypH_btnDownloadExcel')
+            driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'});",button)
+            try:button.click();return True
+            except ElementClickInterceptedException:return False
+        WebDriverWait(self.driver,30,poll_frequency=.25).until(ready)
+
     def read_all(self):
         data=self.open()
         if data['approve_visible'] or data['reject_visible']:raise ValueError('Close any existing Principal decision popup before starting.')
@@ -274,7 +325,8 @@ class PrincipalPortal:
             path=self.folder/('empty-queue-'+datetime.now(timezone.utc).strftime('%H%M%S%f')+'.json')
             path.write_text(json.dumps(data,indent=2),encoding='utf-8')
             return [],dict(file=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest(),total=0)
-        before={p.name for p in self.folder.iterdir()};self.driver.find_element(By.ID,'bodypH_btnDownloadExcel').click()
+        before={p.name for p in self.folder.iterdir()}
+        self.click_download(data)
         stable={}
         def downloaded(d):
             self.stop();files=[p for p in self.folder.glob('*.xls') if p.name not in before and p.stat().st_size>0]
@@ -302,6 +354,7 @@ class PrincipalPortal:
         if data['approve_visible'] or data['reject_visible']:raise ValueError('Unexpected Principal decision popup.')
         before=begin_read(self.driver,row['approve'],'Open Principal approval confirmation')
         self.driver.find_element(By.ID,row['approve']).click();wait_read(self.driver,before,self.stop)
+        self.approval_context=dict(request=dict(request),before=data,confirmed=False)
         current=self.snapshot()
         if (current['total']!=data['total'] or not current['approve_visible'] or current['reject_visible'] or current['approve_id']!=request['id']
                 or not any(grid_row_matches(raw,request) for raw in current['rows'])):raise ValueError('Approval popup is not bound to the validated request; stop without confirmation.')
@@ -310,6 +363,36 @@ class PrincipalPortal:
         if not data['approve_visible'] or data['reject_visible'] or data['approve_id']!=request['id']:raise ValueError('Principal confirmation target changed.')
         before=begin_read(self.driver,'bodypH_btnApproveSubmit','Principal approval response')
         self.driver.find_element(By.ID,'bodypH_btnApproveSubmit').click();wait_read(self.driver,before,self.stop)
+        self.approval_context['confirmed']=True
+    def verify_transition(self,pending,request):
+        """Fast class-wide verification: exact popup/postback + complete page + count.
+
+        Remaining unseen rows retain initial verified values until the final full
+        export audit. This evidence is explicitly distinct from a full export.
+        """
+        context=getattr(self,'approval_context',None)
+        if not context or context['request']!=request or not context['confirmed']:raise ValueError('No completed response bound to this approval request.')
+        if len(pending)!=int(context['before']['total']) or next((r for r in pending if r['id']==request['id']),None)!=request:raise ValueError('Approval queue baseline changed.')
+        data=self.snapshot();remaining=[r for r in pending if r['id']!=request['id']]
+        if int(data['total'])!=len(remaining) or data['approve_visible'] or data['reject_visible']:raise ValueError('Approval response did not reduce the selected class queue by exactly one.')
+        if remaining:
+            target_page=min(int(context['before']['page'][0]),(len(remaining)+9)//10)
+            if data['page']!=[str(target_page)]:data=self.page(target_page)
+        if any(raw['cells'][1:3]==[request['exam_roll'],request['regno']] and subject_name(raw['cells'][4])==request['subject'] for raw in data['rows']):raise ValueError('Approved student/subject is still displayed; do not retry blindly.')
+        seen=set()
+        for raw in data['rows']:
+            matches=[r for r in remaining if grid_row_matches(raw,r)]
+            if len(matches)!=1 or matches[0]['id']in seen:raise ValueError('Visible remaining requests differ from the verified queue.')
+            seen.add(matches[0]['id'])
+        if remaining and data['page']==context['before']['page']:
+            for raw in context['before']['rows']:
+                if grid_row_matches(raw,request):continue
+                if not any(current['cells']==raw['cells']for current in data['rows']):raise ValueError('Another displayed request changed during approval.')
+        proof_file=self.folder/('queue-transition-'+datetime.now(timezone.utc).strftime('%H%M%S%f')+'.json')
+        proof_file.write_text(json.dumps(dict(request=request,before=context['before'],after=data,completed_bound_response=True),indent=2),encoding='utf-8')
+        self.approval_context=None
+        return remaining,dict(file=str(proof_file),sha256=hashlib.sha256(proof_file.read_bytes()).hexdigest(),total=len(remaining),kind='live_queue_transition',coverage='Complete displayed page and live class total; unseen rows are checked by final full-queue audit.')
+
 
 def verify_removal(before,after,request):
     old={r['id']:r for r in before};new={r['id']:r for r in after}
@@ -332,7 +415,7 @@ def tracking_receipts(root,school,cls,session):
 
 def run_approval(jobs,source,history_root,school_account,principal_account,*,execute=False,confirm_session=False,
                  report_session='Auto',confirm_callback=None,stop_event=None,on_driver_ready=None,driver_factory=None,login_callback=None,report_reader=None,portal_factory=None,
-                 approval_mode='excel',exclusions=None,student_class=None,session=''):
+                 approval_mode='excel',exclusions=None,student_class=None,session='',on_progress=None):
     from ..browser import get_driver,login_only
     from .internal_assessment_policy import CohortAbsencePolicy,source_absences,apply_holds
     from .internal_assessment_browser import _stop
@@ -361,6 +444,17 @@ def run_approval(jobs,source,history_root,school_account,principal_account,*,exe
         journal=ApprovalJournal(root,scope)
         run=journal.folder/'Runs'/datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S-%f');run.mkdir(parents=True)
         report=dict(approval_mode=approval_mode,exclusions=sorted(excluded),mode='approve' if execute else 'read_only',scope=scope,source=str(source) if source else '',source_sha256=digest,status='started',verified_approved=[],requests=[],unresolved=list(journal.unresolved()))
+        def progress(queue,stage):
+            approved=journal.approved();initial=report.get('initial_requests',queue);tracked=set(approved)|{r['id']for r in initial}
+            students={(r['regno'],r['exam_roll'])for r in initial}
+            for event in journal.events:
+                if event.get('request_id')in approved and event.get('request'):students.add((event['request']['regno'],event['request']['exam_roll']))
+            value=dict(stage=stage,student_class=cls,session=session,verified=len(approved),total_records=len(tracked),remaining=len(queue),students_total=len(students),students_remaining=len({(r['regno'],r['exam_roll'])for r in queue}),approved_this_run=len(report['verified_approved']),held=sum(not e['eligible']for e in report['requests']))
+            report['progress']=value
+            if on_progress:
+                try:on_progress(value)
+                except Exception:print('[PROGRESS DISPLAY] Display update unavailable; approval history is retained.')
+            print(f'[APPROVAL PROGRESS] {value["verified"]}/{value["total_records"]} tracked awards verified; {value["remaining"]} pending awards; {value["students_remaining"]} students pending; {value["held"]} held/excluded awards.')
         def write():
             temp=run/'report.tmp';temp.write_text(json.dumps(report,indent=2),encoding='utf-8');os.replace(temp,run/'report.json')
             rows=['<!doctype html><meta charset="utf-8"><title>Principal Approval History</title><h1>Principal Approval History</h1>']
@@ -368,7 +462,8 @@ def run_approval(jobs,source,history_root,school_account,principal_account,*,exe
             rows.append('<p>Outcome: '+escape(report['status'])+'. Approval is separate from submission.</p>')
             rows.append('<p>Selection: '+escape(report['approval_mode'])+'; excluded student pairs: '+str(len(report['exclusions']))+'.</p>')
             rows.append('<p>Verified in this run: '+str(len(report['verified_approved']))+'.</p><table border="1"><tr><th>Subject</th><th>Registration</th><th>Exam roll</th><th>Name</th><th>Given / Max</th><th>Outcome / review</th></tr>')
-            verified=set(report['verified_approved']);unresolved=set(report['unresolved'])
+            verified=set(report['verified_approved']);unresolved=set(journal.unresolved())
+            if unresolved:rows.append('<p>Earlier unresolved requests: '+str(len(unresolved))+'. These are held for manual reconciliation; unrelated eligible requests may continue.</p>')
             for entry in report['requests']:
                 r=entry['request'];outcome='Uncertain approval; verify official status before retrying' if r['id'] in unresolved else 'Approval verified' if r['id'] in verified else 'Eligible; not approved in this run' if entry['eligible'] else '; '.join(entry['reasons'])
                 rows.append('<tr>'+''.join('<td>'+escape(str(v))+'</td>' for v in [r['subject'],r['regno'],r['exam_roll'],r['name'],r['marks']+' / '+r['maximum'],outcome])+'</tr>')
@@ -386,7 +481,7 @@ def run_approval(jobs,source,history_root,school_account,principal_account,*,exe
             if on_driver_ready:on_driver_ready(driver)
             (login_callback or login_only)(driver,role='principal')
             portal=(portal_factory or PrincipalPortal)(driver,run/'Downloads',cls,principal_account,stop_event)
-            pending,evidence=portal.read_all();report['initial_export']=evidence
+            pending,evidence=portal.read_all();report['initial_export']=evidence;report['initial_requests']=list(pending)
             if any((reg==r['regno'] and exam!=r['exam_roll']) or (exam==r['exam_roll'] and reg!=r['regno']) for reg,exam in excluded for r in pending):
                 raise ValueError('An exclusion conflicts with the fetched student identifiers; correct the pair before approval.')
             active_subjects={r['subject'] for r in pending};roster_checks={};roster=None;matches=[]
@@ -399,10 +494,19 @@ def run_approval(jobs,source,history_root,school_account,principal_account,*,exe
                     matched=match_student_report(plan,roster,{'verified':set(),'manual':set()});matches.append(matched)
                     roster_checks[plan.subject]={(r['excel_registration'],r['excel_exam_roll']):r for r in matched['records'] if r['excel_registration']}
                 (run/'roster_matching.json').write_text(json.dumps(matches,indent=2),encoding='utf-8')
-            classify=lambda queue:select_requests(plans,queue,roster_checks,mode=approval_mode,exclusions=excluded,roster=roster,holds=CohortAbsencePolicy(root,school_account,cls,session).holds)
-            report['requests']=classify(pending);report['unmatched_exclusions']=[list(pair) for pair in sorted(excluded-{(r['regno'],r['exam_roll']) for r in pending})];report['total_pending']=len(pending);write()
+            recovered=reconcile_interrupted_approvals(journal,pending,evidence)
+            report['recovered_approvals']=recovered
+            if recovered:print(f'[APPROVAL RECOVERED] {len(recovered)} interrupted receipt(s) verified by exact before/after exports; no approval clicked again.')
+            def classify(queue):
+                entries=select_requests(plans,queue,roster_checks,mode=approval_mode,exclusions=excluded,roster=roster,holds=CohortAbsencePolicy(root,school_account,cls,session).holds)
+                unresolved=journal.unresolved();held_ids=set(unresolved);held_keys={key(e['request']) for e in unresolved.values()}
+                for entry in entries:
+                    if entry['request']['id'] in held_ids or key(entry['request']) in held_keys:
+                        entry['reasons'].append('Earlier approval for this request is uncertain; reconcile its official status before retrying.');entry['eligible']=False
+                return entries
+            report['requests']=classify(pending);report['unmatched_exclusions']=[list(pair) for pair in sorted(excluded-{(r['regno'],r['exam_roll']) for r in pending})];report['total_pending']=len(pending);progress(pending,'preview');write()
             uncertain=journal.unresolved()
-            if uncertain and execute:raise ValueError('An earlier Principal action is uncertain. Use Principal reconciliation; never repeat a decision blindly.')
+            if uncertain:print(f'[APPROVAL HOLDS] {len(uncertain)} earlier uncertain request(s) will not be retried. Other validated requests may continue.')
             reappeared={r['id'] for r in pending}&journal.approved()
             if reappeared:
                 for request in pending:
@@ -432,12 +536,20 @@ def run_approval(jobs,source,history_root,school_account,principal_account,*,exe
                 if source and hashlib.sha256(source.read_bytes()).hexdigest()!=digest:raise ValueError('Source changed while the Principal popup was open; confirmation not clicked.')
                 journal.append('approval_submit_attempt',request_id=request['id'],request=request)
                 portal.confirm(request)
-                after,proof=portal.read_all();verify_removal(pending,after,request)
+                fast=getattr(portal,'verify_transition',None)
+                if approval_mode!='excel' and callable(fast):after,proof=fast(pending,request)
+                else:
+                    after,proof=portal.read_all();verify_removal(pending,after,request)
                 journal.append('approval_verified',request_id=request['id'],request=request,source_sha256=digest,evidence=proof,
-                               verification='Single Approved confirmation bound to request ID; completed response and exact full-export removal with all other requests unchanged. Not independently read from a separate status report.')
-                report['verified_approved'].append(request['id']);pending=after;fresh_evidence=proof;write()
+                               verification=('Exact request-bound confirmation and completed response; live class total decreased by one, target absent and full displayed page validated; final full-queue audit required.' if proof.get('kind')=='live_queue_transition' else 'Single Approved confirmation bound to request ID; completed response and exact full-export removal with all other requests unchanged. Not independently read from a separate status report.'))
+                report['verified_approved'].append(request['id']);pending=after;fresh_evidence=proof;progress(pending,'approving');write()
                 print(f'[APPROVAL VERIFIED] {request["subject"]}: one exact request removed; {len(pending)} total remain.')
-            report['status']='finished_with_holds' if any(not e['eligible'] for e in report['requests']) else 'finished'
+            if approval_mode!='excel':
+                final_rows,final_proof=portal.read_all()
+                if {r['id']:r for r in final_rows}!={r['id']:r for r in pending}:raise ValueError('Final class queue differs from tracked progress; inspect before any further decision.')
+                report['final_queue_audit']=final_proof
+            report['status']='finished_with_holds' if journal.unresolved() or any(not e['eligible'] for e in report['requests']) else 'finished'
+            progress(pending,'complete' if not pending else 'held');write()
             return report
         except Exception as exc:
             report['status']='failed';report['error']=str(exc)[:1200]
@@ -454,5 +566,9 @@ def run_approval(jobs,source,history_root,school_account,principal_account,*,exe
                 print('[TRACKING NOT REFRESHED] '+str(tracking_error)+'. Approval journal retained.')
             print(f'[PRINCIPAL HISTORY] {journal.folder/"OPEN APPROVAL HISTORY.html"}')
             if driver is not None:
-                try:driver.quit()
-                except Exception:pass
+                if report['status']=='failed' and on_driver_ready:
+                    driver._jkbose_keep_open=True
+                    report['browser_left_open']=True;write();print('[BROWSER KEPT OPEN] Inspect the page or use Force Close Browser. No failed approval is retried.')
+                else:
+                    try:driver.quit()
+                    except Exception:pass
