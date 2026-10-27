@@ -654,7 +654,7 @@ Open Internal Assessment, select class and academic session, then choose **Princ
 
 Complete the separate Principal login and captcha yourself. One preview lists the complete selection and hold reasons. The final warning states the class, session, eligible count and held count, and requires explicit confirmation that approval cannot be undone by this software. Cancelling does not approve anything. After confirmation, no per-student prompt is required.
 
-Absent students and existing class-wide holds remain excluded from automatic approval in every subject. Below-pass, invalid, unsupported-subject or conflicting-identity requests stay untouched. Previously approved requests are absent from the pending queue; uncertain prior actions are never retried blindly. Every verified action retains a durable Principal receipt. A workbook is refreshed only in Excel mode; class-wide mode keeps its receipts in Principal history for later tracking refresh.
+Absent students and existing class-wide holds remain excluded from automatic approval in every subject. Below-pass, invalid or conflicting-identity requests stay untouched. Class-wide modes accept all nonblank subjects verified in the official Students report, including Commerce and other streams, using each request's official maximum. Strict Excel mode still requires the selected source subjects. Previously approved requests are absent from the pending queue; uncertain prior actions are never retried blindly. Every verified action retains a durable Principal receipt. A workbook is refreshed only in Excel mode; class-wide mode keeps its receipts in Principal history for later tracking refresh.
 
 CLI defaults remain read-only. Class-wide example (no Excel required):
 
@@ -697,3 +697,14 @@ Analysis uses exact registration + exam-roll + subject, with names as a secondar
 The Analysis tab displays overall counts, per-source and per-subject counts and detailed exceptions. Every completed run retains a PDF, full analysis and checksummed manifest beneath the configured private history's `References/Verification/Class <class> - <session>/<timestamp>-<id>/` (or `Verification/` when no References migration exists). `LATEST.json` points to the latest run. Open older results in the Verification history tab without rerunning sources. **Save PDF as…** copies the saved report to any selected location while preventing overwrite of input evidence or immutable history.
 
 No live award submission, Principal approval/rejection or production portal changes are performed by this feature.
+
+
+## All-stream class-wide approval and reordered pages
+
+Entire class and class-except-selected-students modes do not use a fixed school subject list. Accountancy, Business Studies, Entrepreneurship, Typewriting and Shorthand and other enrolled subjects are validated from the official request and Students report. Case/spacing/punctuation variations in subject labels are normalized for enrollment comparison. Both identifiers, eligibility/fee status, attendance, known student-wide holds, the displayed maximum and the 40% passing threshold remain enforced. Excel mode retains strict source matching.
+
+After a confirmed approval, the server may move other pending rows to a different page. If the previous visible rows no longer fit on the same page, the tool reads the complete queue and proves that only the targeted request was removed, rather than failing merely because page membership changed. Changed marks, identities, extra removals or additions still fail verification. Approval clicks are never retried automatically.
+
+Interrupted actions can be reconciled from a complete hashed initial export, the intact chain of verified request-bound page transitions and a fresh complete export showing only the interrupted request removed. Missing/tampered evidence, an absent submit attempt, conflicting changes or a still-pending target never becomes an automatic approval receipt. Unresolved requests remain held individually while unrelated eligible requests may continue.
+
+Restart after the update. For a stopped browser, use Force Close Browser in the application before starting a new run. Complete Principal login again and review the fresh preview; confirmed approvals are retained in history and absent from the live pending queue. No live decisions were made during development.

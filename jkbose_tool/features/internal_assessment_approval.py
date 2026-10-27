@@ -177,12 +177,13 @@ def select_requests(plans,rows,roster_checks,*,mode,exclusions,roster,holds):
             if has_assigned_exam_roll(student):by_pair.setdefault((student['regno'],student['exam_roll']),[]).append(student)
         for row in rows:
             issues=[];candidates=by_pair.get((row['regno'],row['exam_roll']),[])
-            if row['subject'] not in SUBJECTS.values():issues.append('Unsupported Internal Assessment subject; manual review.')
+            if not norm(row['subject']):issues.append('The official request subject is blank; manual review.')
             if len(candidates)!=1:issues.append('Student identifiers are missing or ambiguous in the Students report.')
             else:
                 student=candidates[0]
                 if norm(student['name'])!=norm(row['name']):issues.append('Student name differs from the paired Students report identity.')
-                if not enrolled_in_subject(student,row['subject']):issues.append('Student is not enrolled in this subject.')
+                enrolled=enrolled_in_subject(student,row['subject']) or norm(subject_name(row['subject']))in{norm(subject_name(token.strip()))for field in student['subjects']for token in re.split(r'[,;\n]+',field)if token.strip()}
+                if not enrolled:issues.append('Student is not enrolled in this subject.')
                 if student['approval'].lower()!='approved' or student['exam_fee'].lower()!='paid':issues.append('Students report eligibility/fee requires manual review.')
             try:
                 maximum=number(row['maximum']);marks=number(row['marks'])
@@ -242,10 +243,10 @@ class ApprovalJournal:
         self.append('manual_approval_resolution',request_id=request_id,request=request,outcome=outcome,actor=actor.strip(),note=note.strip())
 
 def reconcile_interrupted_approvals(journal,pending,evidence):
-    """Recover only a submitted request's exact single removal from hashed exports.
+    """Recover only a submitted request's exact removal from complete hashed queues.
 
     Pending-queue absence alone is never an approval receipt. Both complete
-    exports must belong to this journal and all unrelated requests must agree.
+    queue baselines must belong to this journal and all unrelated requests must agree.
     """
     def checked_export(proof):
         path=Path(proof['file']).resolve(strict=True)
@@ -256,6 +257,41 @@ def reconcile_interrupted_approvals(journal,pending,evidence):
             if data['total']!='0':raise ValueError('Recovery empty-queue evidence is not empty.')
             return []
         return parse_export(path,journal.scope['class'],proof['total'])
+    read_export=checked_export
+    def checked_export(proof):
+        # Reconstruct an exact baseline from the original full export and the
+        # journal's completed request-bound, hashed live transitions. Iterative
+        # traversal handles large classes without a recursion-depth limit.
+        chain=[];seen=set();current=proof
+        while current.get('kind')=='live_queue_transition':
+            signature=(current.get('file'),current.get('sha256'))
+            if signature in seen:raise ValueError('Cyclic approval evidence.')
+            seen.add(signature);path=Path(current['file']).resolve(strict=True)
+            if not path.is_relative_to(journal.folder.resolve())or hashlib.sha256(path.read_bytes()).hexdigest()!=current['sha256']:raise ValueError('Transition evidence integrity failed.')
+            data=json.loads(path.read_text(encoding='utf-8'))
+            verified=next((i for i,e in enumerate(journal.events)if e['kind']=='approval_verified'and e.get('evidence')==current),None)
+            if verified is None:raise ValueError('Transition has no verified journal receipt.')
+            event=journal.events[verified];request=event['request']
+            opened=next((i for i in range(verified-1,-1,-1)if journal.events[i]['kind']=='approval_open_attempt'and journal.events[i].get('request')==request),None)
+            if opened is None or not any(e['kind']=='approval_submit_attempt'and e.get('request')==request for e in journal.events[opened+1:verified]):raise ValueError('Transition lacks a bound submit attempt.')
+            if data.get('request')!=request or data.get('completed_bound_response')is not True:raise ValueError('Transition response is incomplete.')
+            chain.append((current,data,request));current=journal.events[opened]['evidence']
+        baseline=read_export(current)
+        for proof,data,request in reversed(chain):
+            before=data['before'];after=data['after']
+            validate_grid(before,journal.scope['class'],journal.scope['principal']);validate_grid(after,journal.scope['class'],journal.scope['principal'])
+            if len(baseline)!=int(before['total'])or int(after['total'])!=len(baseline)-1 or int(after['total'])!=proof['total']:raise ValueError('Transition count differs from complete baseline.')
+            if next((r for r in baseline if r['id']==request['id']),None)!=request or not any(grid_row_matches(raw,request)for raw in before['rows']):raise ValueError('Transition request differs from baseline.')
+            remaining=[r for r in baseline if r['id']!=request['id']]
+            for snap,rows in [(before,baseline),(after,remaining)]:
+                matched=[]
+                for raw in snap['rows']:
+                    candidates=[r for r in rows if grid_row_matches(raw,r)]
+                    if len(candidates)!=1:raise ValueError('Transition row differs from full baseline.')
+                    matched.append(candidates[0]['id'])
+                if len(matched)!=len(set(matched)):raise ValueError('Transition repeats an award.')
+            baseline=remaining
+        return baseline
     recovered=[]
     unresolved=journal.unresolved()
     if not unresolved:return recovered
@@ -273,7 +309,7 @@ def reconcile_interrupted_approvals(journal,pending,evidence):
             verify_removal(before,after,request)
         except (ValueError,OSError,KeyError,TypeError):continue
         journal.append('approval_verified',request_id=request_id,request=request,source_sha256=event.get('source_sha256',''),evidence=evidence,
-                       verification='Recovered interrupted verification: prior exact request-bound submit attempt, hashed complete before/after exports, only that exact request removed; every other request unchanged. Not an independent Approved-status report.',
+                       verification='Recovered interrupted verification: prior exact request-bound submit attempt, complete hashed baseline (export or verified transition chain) and fresh full export, only that exact request removed; every other request unchanged. Not an independent Approved-status report.',
                        recovered=True,before_evidence=event['evidence'])
         recovered.append(request_id)
     return recovered
@@ -385,9 +421,19 @@ class PrincipalPortal:
             if len(matches)!=1 or matches[0]['id']in seen:raise ValueError('Visible remaining requests differ from the verified queue.')
             seen.add(matches[0]['id'])
         if remaining and data['page']==context['before']['page']:
+            by_identity={(r['exam_roll'],r['regno'],r['subject']):r for r in remaining};before_ids=set()
             for raw in context['before']['rows']:
                 if grid_row_matches(raw,request):continue
-                if not any(current['cells']==raw['cells']for current in data['rows']):raise ValueError('Another displayed request changed during approval.')
+                prior=by_identity.get((raw['cells'][1],raw['cells'][2],subject_name(raw['cells'][4])))
+                if prior is None or not grid_row_matches(raw,prior):raise ValueError('Before-page request differs from the verified baseline.')
+                before_ids.add(prior['id'])
+            if not before_ids<=seen:
+                # Page membership can change when the server re-sorts tied rows.
+                # A complete read proves this rather than treating a moved row as changed.
+                after,proof=self.read_all();verify_removal(pending,after,request)
+                self.approval_context=None
+                print('[APPROVAL CHECK] Page membership changed; complete queue verified with only the approved request removed.')
+                return after,proof
         proof_file=self.folder/('queue-transition-'+datetime.now(timezone.utc).strftime('%H%M%S%f')+'.json')
         proof_file.write_text(json.dumps(dict(request=request,before=context['before'],after=data,completed_bound_response=True),indent=2),encoding='utf-8')
         self.approval_context=None
@@ -496,7 +542,7 @@ def run_approval(jobs,source,history_root,school_account,principal_account,*,exe
                 (run/'roster_matching.json').write_text(json.dumps(matches,indent=2),encoding='utf-8')
             recovered=reconcile_interrupted_approvals(journal,pending,evidence)
             report['recovered_approvals']=recovered
-            if recovered:print(f'[APPROVAL RECOVERED] {len(recovered)} interrupted receipt(s) verified by exact before/after exports; no approval clicked again.')
+            if recovered:print(f'[APPROVAL RECOVERED] {len(recovered)} interrupted receipt(s) verified by complete hashed queue baselines; no approval clicked again.')
             def classify(queue):
                 entries=select_requests(plans,queue,roster_checks,mode=approval_mode,exclusions=excluded,roster=roster,holds=CohortAbsencePolicy(root,school_account,cls,session).holds)
                 unresolved=journal.unresolved();held_ids=set(unresolved);held_keys={key(e['request']) for e in unresolved.values()}

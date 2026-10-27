@@ -9,6 +9,23 @@ from jkbose_tool.features import internal_assessment_approval as approval
 
 class ApprovalModesTests(unittest.TestCase):
     setUp=fixtures.PrincipalTests.setUp;write_book=fixtures.PrincipalTests.write_book;jobs=fixtures.PrincipalTests.jobs;rows=fixtures.PrincipalTests.rows;roster=fixtures.PrincipalTests.roster;run_approval=fixtures.PrincipalTests.run_approval;journal=fixtures.PrincipalTests.journal
+    def test_class_wide_accepts_any_official_enrolled_subject_and_maximum(self):
+        roster=self.roster();subjects=['Accountancy','Business Studies','Entrepreneurship','Typewriting and Shorthand','New Stream Subject']
+        roster['rows'][0]['subjects']=[', '.join(s.upper()for s in subjects),'','','','']
+        rows=[dict(self.rows()[0],id=str(i+1),subject=s,marks=str(mx),maximum=str(mx))for i,(s,mx)in enumerate(zip(subjects,[5,20,5,40,25]))]
+        for mode in ['class_all','class_except']:
+            entries=approval.select_requests([],rows,{},mode=mode,exclusions=set(),roster=roster,holds=[])
+            self.assertTrue(all(e['eligible']for e in entries),entries)
+        portal=FakePortal(rows)
+        result,_,_=self.run_approval(portal,True,approval_mode='class_all',student_class='11',session='2025-26',report_reader=Mock(return_value=roster))
+        self.assertEqual(result['status'],'finished');self.assertEqual(portal.confirms,['1','2','3','4','5'])
+    def test_new_subjects_preserve_marks_attendance_enrollment_and_exclusions(self):
+        roster=self.roster();roster['rows'][0]['subjects']=['Accountancy','','','',''];row=dict(self.rows()[0],subject='Accountancy',marks='5',maximum='5')
+        for change,excluded in [({'marks':'1'},set()),({'marks':'6'},set()),({'maximum':'0'},set()),({'attendance':'A'},set()),({'subject':'Not enrolled'},set()),({}, {(row['regno'],row['exam_roll'])})]:
+            entries=approval.select_requests([],[dict(row,**change)],{},mode='class_all',exclusions=excluded,roster=roster,holds=[])
+            self.assertFalse(entries[0]['eligible'])
+        # Strict Excel approval still requires a matching selected source subject.
+        self.assertEqual(approval.select_requests([j['plan']for j in self.jobs()], [row],{},mode='excel',exclusions=set(),roster=roster,holds=[]),[])
     def test_entire_class_needs_no_workbook_and_approves_changed_portal_marks(self):
         rows=self.rows();rows[0]['marks']='10';roster=self.roster();self.file.unlink();portal=FakePortal(rows);driver=Mock()
         result=approval.run_approval([],None,self.history,'sch000001','prin000001',approval_mode='class_all',student_class='11',session='2025-26',execute=True,confirm_session=True,

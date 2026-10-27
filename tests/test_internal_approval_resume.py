@@ -75,6 +75,37 @@ class FastPortal(fixtures.FakePortal):
 
 class FastProgressTests(unittest.TestCase):
     setUp=fixtures.PrincipalTests.setUp;write_book=fixtures.PrincipalTests.write_book;jobs=fixtures.PrincipalTests.jobs;rows=fixtures.PrincipalTests.rows;roster=fixtures.PrincipalTests.roster;run_approval=fixtures.PrincipalTests.run_approval;journal=fixtures.PrincipalTests.journal
+    def test_page_reordering_uses_full_queue_proof_without_repeating_approval(self):
+        rows=[dict(self.rows()[0],id=str(i),exam_roll=str(301000001+i),regno='TEST'+str(i))for i in range(12)]
+        portal=FastPortal(rows,self.root/'reordered-proofs');before=deepcopy(rows)
+        portal.open_approval(rows[0]);portal.confirm(rows[0]);portal.rows=portal.rows[7:]+portal.rows[:7]
+        after,proof=portal.verify_transition(before,before[0])
+        self.assertEqual(len(after),11);self.assertEqual(portal.confirms,['0']);self.assertEqual(portal.reads,1)
+        # A second, unseen deletion cannot pass merely because rows moved.
+        portal=FastPortal(before,self.root/'reordered-proof-fail');portal.open_approval(before[0]);portal.confirm(before[0])
+        portal.rows=portal.rows[7:]+portal.rows[:7];portal.rows[-1]=dict(portal.rows[-1],marks='9')
+        with self.assertRaisesRegex(ValueError,'only the exact request'):portal.verify_transition(before,before[0])
+    def test_interrupted_action_recovers_after_a_verified_fast_transition_chain(self):
+        helper=ApprovalResumeTests();helper.root=self.root
+        journal=self.journal();rows=self.rows();initial=helper.export(journal,'initial.xls',rows)
+        portal=FastPortal(rows,self.root/'Downloads');portal.cls='11';portal.principal='prin000001'
+        original_snapshot=portal.snapshot
+        def snapshot():
+            data=original_snapshot();data.update(account='prin000001',**{'class':'11'},headers=approval.HEADERS)
+            for i,raw in enumerate(data['rows']):raw['approve']='bodypH_gridRR_btnApprove_'+str(i)
+            return data
+        portal.snapshot=snapshot
+        # The real receipt files must be within the journal, as in production.
+        portal.folder=journal.folder/'Runs'/'fast-chain';portal.folder.mkdir(parents=True)
+        journal.append('approval_open_attempt',request=rows[0],evidence=initial)
+        journal.append('approval_submit_attempt',request_id=rows[0]['id'],request=rows[0])
+        portal.open_approval(rows[0]);portal.confirm(rows[0]);remaining,proof=portal.verify_transition(rows,rows[0])
+        journal.append('approval_verified',request_id=rows[0]['id'],request=rows[0],evidence=proof)
+        journal.append('approval_open_attempt',request=rows[1],evidence=proof)
+        journal.append('approval_submit_attempt',request_id=rows[1]['id'],request=rows[1])
+        after=helper.export(journal,'fresh-empty.xls',[])
+        self.assertEqual(approval.reconcile_interrupted_approvals(journal,[],after),[rows[1]['id']])
+        self.assertFalse(journal.unresolved())
     def test_class_mode_has_no_per_award_excel_download_and_reports_progress(self):
         base_rows=self.rows();roster=self.roster();base=roster['rows'][0];roster['rows']=[];rows=[]
         for i in range(6):
