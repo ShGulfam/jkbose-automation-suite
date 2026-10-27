@@ -34,11 +34,20 @@ class AwardVerificationGUI:
         filearea.rowconfigure(0,weight=1)
         ttk.Label(inputs,text='Supports combined Botany/Zoology, individual JKBOSE requests and grouped student/subject marks. Healthcare and IT/ITES are excluded from required Internal Assessment subjects. Scans need readable/OCR text; unsupported layouts are flagged.',wraplength=920).pack(anchor='w',pady=10)
         ttk.Label(top,textvariable=status,wraplength=980).pack(side='bottom',fill='x',padx=16,pady=(0,5))
+        detail=scrolledtext.ScrolledText(results,height=4,wrap='word',font=('Segoe UI',10),state='disabled');detail.pack(side='bottom',fill='x',pady=(8,0))
+        def set_detail(text):
+            detail.configure(state='normal');detail.delete('1.0','end');detail.insert('1.0',text);detail.configure(state='disabled')
+        set_detail('Select a finding below to read its complete source, student identifiers and details.')
         overview=scrolledtext.ScrolledText(results,height=11,wrap='word',font=('Segoe UI',10),state='disabled');overview.pack(fill='x',pady=(0,10))
         treeframe=ttk.Frame(results);treeframe.pack(fill='both',expand=True);columns=('kind','source','name','roll','reg','subject','detail');tree=ttk.Treeview(treeframe,columns=columns,show='headings')
         for key,label,width in [('kind','Finding',180),('source','Source',220),('name','Student',160),('roll','Exam roll',110),('reg','Registration',170),('subject','Subject',110),('detail','Details',420)]:tree.heading(key,text=label);tree.column(key,width=width,stretch=False)
         ys=ttk.Scrollbar(treeframe,orient='vertical',command=tree.yview);xs=ttk.Scrollbar(treeframe,orient='horizontal',command=tree.xview);tree.configure(yscrollcommand=ys.set,xscrollcommand=xs.set);tree.grid(row=0,column=0,sticky='nsew');ys.grid(row=0,column=1,sticky='ns');xs.grid(row=1,column=0,sticky='ew');treeframe.rowconfigure(0,weight=1);treeframe.columnconfigure(0,weight=1)
-        selected={'folder':None};history_rows={}
+        selected={'folder':None};history_rows={};findings={}
+        def show_detail(event=None):
+            chosen=tree.selection()
+            if chosen and chosen[0]in findings:
+                row=findings[chosen[0]];set_detail(row['kind']+' | '+row['source']+'\n'+row['name']+' | Exam roll: '+row['roll']+' | Registration: '+row['reg']+' | Subject: '+row['subject']+'\n'+row['detail'])
+        tree.bind('<<TreeviewSelect>>',show_detail)
         histories=ttk.Treeview(history,columns=('date','class','session','outcome'),show='headings')
         for key,label,width in [('date','Recorded (IST)',190),('class','Class',70),('session','School session',120),('outcome','Result',460)]:histories.heading(key,text=label);histories.column(key,width=width)
         histories.pack(fill='both',expand=True)
@@ -59,7 +68,12 @@ class AwardVerificationGUI:
                     if expected or any(int(c)for c in counts):lines.append(f'{label}: expected {expected if report["completeness_checked"]else "unverified"}; files '+', '.join(counts))
                 lines.append('Every selected award file is a separate snapshot. No live submission/approval status is inferred.')
                 overview.configure(state='normal');overview.delete('1.0','end');overview.insert('1.0','\n'.join(lines));overview.configure(state='disabled');tree.delete(*tree.get_children())
-                for row in report['issues']:tree.insert('','end',values=tuple(row[key]for key in columns))
+                findings.clear()
+                for row in report['issues']:
+                    item=tree.insert('','end',values=tuple(row[key]for key in columns));findings[item]=row
+                if report['issues']:
+                    first=tree.get_children()[0];tree.selection_set(first);show_detail()
+                else:set_detail('No exceptions or warnings were found in the supplied evidence.')
                 notebook.select(results);status.set('Analysis retained in private verification history. Save PDF as… creates a copy anywhere you choose.');refresh_history()
             except Exception as exc:messagebox.showerror('Verification history',str(exc),parent=top)
         def open_selected():

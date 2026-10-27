@@ -1,33 +1,33 @@
 # Changes since the previous commit - 27 October 2026
 
-Exact local commit message: `fix(internal-assessment): approve all streams and handle queue reordering`
+Exact local commit message: `fix(verification): support alphanumeric student registrations`
 
-## Exact files modified
+## Exact modified files
 
-- `jkbose_tool/features/internal_assessment_approval.py`
-- `tests/test_internal_approval_modes.py`
-- `tests/test_internal_approval_resume.py`
+- `jkbose_tool/features/internal_assessment_verification.py`
+- `jkbose_tool/internal_assessment_verification_gui.py`
+- `tests/test_internal_verification.py`
 - `README.md`
 - `CHANGES_SINCE_LAST_COMMIT.md`
 
-No added or removed files. Institutional exports, students, journals, generated evidence and backups remain private and unstaged.
+No added or removed files. Real student documents, private history, scratch files and generated PDFs remain excluded from Git.
 
-## Summary
+## Changes
 
-- Remove the fixed subject whitelist only from Entire class and class-except-students approval. Use official enrolled subjects and displayed maxima for Commerce and all other streams. Normalize subject labels for enrollment matching; retain exact paired IDs, eligibility, attendance, absence/history/exclusion holds and the 40% pass range. Strict Excel matching is unchanged.
-- When the server reorders pending page membership after approval, verify the complete queue with exact single removal rather than falsely reporting changed rows. Never retry an approval click.
-- Reconstruct interrupted-action baselines from the complete hashed export and intact, journaled request-bound live transition chain. A fresh complete queue must prove exact single removal; missing, changed or unsubmitted evidence remains unresolved.
-- Document restarting and resuming from the fresh pending queue without repeating confirmed decisions.
+- Preserve legacy letter-prefixed registration numbers throughout admit-card, matrix, individual and grouped PDF readers instead of rejecting a whole input as unreadable.
+- Exclude the matched registration from the exam-roll scan, preventing a nine-digit registration suffix being interpreted as a second exam roll. Keep exact identifiers distinct across sources.
+- Add a selectable full-details area for Analysis findings so source paths and errors remain readable without horizontal scrolling.
+- Retain failed historical analyses and generate a new completed history/report from the original unchanged evidence.
 
-## Validation
+## Verification
 
-- Full Python suite: 317 tests passed, including all-stream enrollment/maxima and safety cases, reordered-page full-queue fallback and interrupted recovery after a verified transition.
-- Offline replay of the saved 1,141-request queue: 1,141 eligible, zero held; previously 154 subjects were held by the fixed-list/case restrictions.
-- Required npm run build passed with Exit Code 0, including 13-page SEO checks. No portal source changes belong to this commit.
-- No live Principal approval/rejection, submission or journal modification was performed during development.
+- Full automation suite: 319 tests passed, including legacy registrations across four PDF layouts and identifier distinction.
+- Actual Class 12 files: 203 admit-card students, 914 expected awards; school consolidated PDF and grouped JKBOSE PDF each contain all 914 awards and match without issues or warnings.
+- Fresh PDF rendered and visually inspected; originals and live awards unchanged.
+- Required npm run build completed with Exit Code 0 and SEO checks passed. No website source changes belong to this commit.
 
-## Manual review and push
+## Manual review, amend and push
 
-Review with `git show --stat HEAD` and `git show HEAD`. To recreate the local commit if desired, run `git reset --soft HEAD~1`, then `git commit -m "fix(internal-assessment): approve all streams and handle queue reordering"`.
+Inspect with `git show --stat HEAD` or `git show HEAD`. To recreate the commit if desired: `git reset --soft HEAD~1`, then `git commit -m "fix(verification): support alphanumeric student registrations"`.
 
 Changes are committed locally only. Run `git push origin main` manually whenever ready. The assistant does not push.

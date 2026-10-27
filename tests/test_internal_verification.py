@@ -12,6 +12,23 @@ def card(subjects=None):return dict(roll=ROLL,reg=REG,name='Example Student',sub
 def source(rows,label='Synthetic'):return dict(label=label,kind='synthetic',rows=rows)
 
 class VerificationTests(unittest.TestCase):
+    def test_alphanumeric_registration_is_preserved_in_every_pdf_layout(self):
+        for reg in ['N99999999999','N999999999']:
+            text=f'ADMIT CARD\n(Class 12th), Annual Regular 2026\nName Example Student Gender Female {ROLL}\nMother Name R.R No. {reg}\nCompulsory 1. General English 2. Physical Education\nAdditional\nVocational Candidate\'s Signature'
+            cards=v.read_admits([text],'12','2025-26');self.assertEqual(cards[0]['reg'],reg)
+            header='SL. EXAM ROLL REG. NO. STUDENT NAME EN PH CH BI ES PD MA UR ED HT PS EC HASH'
+            matrix=v.read_matrix([header+f'\n1 {ROLL} {reg} Example Student 16 x x x x 15 x x x x x x 31'],'12')
+            grouped=v.read_grouped([f'1 12 {reg} {ROLL} Example Student     General English: (16/20), Physical Education: (15/15)'],'12')
+            flat=v.read_flat_pdf([f'100 12 {ROLL} {reg} Example Student General English P 16 20 01-Jan-26'],'12')
+            self.assertEqual(flat[0]['reg'],reg)
+            report=v.analyze(cards,[source(matrix,'School'),source(grouped,'Board')],'12','2025-26')
+            self.assertEqual(report['error_count'],0);self.assertEqual(report['expected_awards'],2)
+
+    def test_numeric_and_alphanumeric_identifiers_remain_distinct(self):
+        cards=[dict(card(),reg='N999999999')]
+        report=v.analyze(cards,[source([award(reg='999999999')])],'12','2025-26')
+        self.assertTrue(report['error_count']);self.assertEqual(report['sources'][0]['missing'],1)
+
     def test_admit_identifiers_subjects_and_vocational(self):
         text=f'ADMIT CARD\n(Class 11th), Annual Regular 2026\nName Example Student   Gender Male  {ROLL}\nMother Name R.R No. {REG}\nCompulsory 1. General English 2. Biology\nAdditional 3. Physical Education\nVocational IT And ITES Candidate\'s Signature'
         cards=v.read_admits([text],'11','2025-26')

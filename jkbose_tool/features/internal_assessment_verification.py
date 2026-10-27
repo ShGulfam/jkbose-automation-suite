@@ -11,7 +11,7 @@ import hashlib,json,re,os,uuid,shutil
 SUBJECTS={'EN':'General English','PH':'Physics','CH':'Chemistry','BI':'Biology','ES':'Environmental Science','PD':'Physical Education','MA':'Mathematics','UR':'Urdu','ED':'Education','HT':'History','PS':'Political Science','EC':'Economics','BO':'Botany','ZO':'Zoology','SC':'Science','SS':'Social Science','HI':'Hindi','KA':'Kashmiri','AR':'Arabic','SA':'Sanskrit','GE':'Geography'}
 ALIASES={re.sub('[^a-z0-9]','',v.lower()):k for k,v in SUBJECTS.items()};ALIASES.update({k.lower():k for k in SUBJECTS});ALIASES.update(english='EN',botanyzoology='BI',biologybotanyzoology='BI')
 VOC={'healthcare','healthcarehtc','htc','itandites','itites','ite','informationtechnology'}
-ID=r'\d{8,24}'
+ID=r'(?:\d{8,24}|[A-Za-z]{1,4}\d{7,23})'
 RULES=ContextVar('verification_subject_rules',default={})
 
 def subject_catalog():return dict(SUBJECTS,**{k:r['label']for k,r in RULES.get().items()})
@@ -78,7 +78,9 @@ def read_admits(pages,cls,session):
         for block in blocks:
             cohort=re.search(r'Class\s+(\d+)',block,re.I);year=re.search(r'Annual.*?\b(20\d{2})\b',block,re.I)
             if not cohort or cohort[1]!=cls or not year or int(year[1])!=session_end(session):raise ValueError(f'Admit-card class/exam year differs from selected cohort on page {pn}.')
-            rolls=re.findall(r'(?<!\d)\d{9}(?!\d)',block);reg=re.search(r'R\.\s*R\s*No\.?\s*('+ID+')',block,re.I);name=re.search(r'(?m)^\s*Name\s+(.+?)\s+Gender',block)
+            reg=re.search(r'R\.\s*R\s*No\.?\s*('+ID+')',block,re.I);name=re.search(r'(?m)^\s*Name\s+(.+?)\s+Gender',block)
+            identity_text=block[:reg.start(1)]+' '+block[reg.end(1):]if reg else block
+            rolls=re.findall(r'(?<!\d)\d{9}(?!\d)',identity_text)
             if len(rolls)!=1 or not reg or not name:raise ValueError(f'Incomplete admit-card identifiers/name on page {pn}.')
             offered=re.search(r'Compulsory\s+([\s\S]*?)(?:Candidate.?s Signature|Note:)',block,re.I)
             if not offered:raise ValueError('Admit-card subjects are unreadable.')

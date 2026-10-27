@@ -708,3 +708,10 @@ After a confirmed approval, the server may move other pending rows to a differen
 Interrupted actions can be reconciled from a complete hashed initial export, the intact chain of verified request-bound page transitions and a fresh complete export showing only the interrupted request removed. Missing/tampered evidence, an absent submit attempt, conflicting changes or a still-pending target never becomes an automatic approval receipt. Unresolved requests remain held individually while unrelated eligible requests may continue.
 
 Restart after the update. For a stopped browser, use Force Close Browser in the application before starting a new run. Complete Principal login again and review the fresh preview; confirmed approvals are retained in history and absent from the live pending queue. No live decisions were made during development.
+
+
+### Alphanumeric registrations and readable findings
+
+Offline PDF verification preserves numeric and supported letter-prefixed registrations exactly, including legacy board registrations, in admit cards, consolidated matrices and grouped/individual JKBOSE awards. A registration that contains nine digits is removed from the exam-roll search region so it cannot be mistaken for a second roll number. Numeric and letter-prefixed registrations are never equated or padded.
+
+Select any finding in the Analysis table to read its complete source, paired identifiers, subject and error in the selectable details area. Long diagnostics remain readable without horizontally scrolling through the entire table. Restart the application after installing parser changes; open the latest verification history or rerun the selected files. Older failed analyses are retained as history.
