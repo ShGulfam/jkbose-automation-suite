@@ -4,3 +4,4 @@ pandas
 openpyxl
 Pillow
 reportlab
+pypdf>=5

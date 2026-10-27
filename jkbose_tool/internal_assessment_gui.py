@@ -7,7 +7,9 @@ from .features.internal_assessment import SUBJECTS, load_plan, submission_issues
 from .features.internal_assessment_batch import load_jobs, workbook_subjects
 from .internal_assessment_approval_gui import PrincipalApprovalGUI
 
-class InternalAssessmentGUI(PrincipalApprovalGUI):
+from .internal_assessment_verification_gui import AwardVerificationGUI
+
+class InternalAssessmentGUI(PrincipalApprovalGUI,AwardVerificationGUI):
     def _build_internal_section(self, parent):
         self._section_header(parent, 'Internal Assessment',
             'Choose your workbook and cohort. Submit shows a preview, checks reports and processes valid awards.')
@@ -71,6 +73,8 @@ class InternalAssessmentGUI(PrincipalApprovalGUI):
                 ('Principal approval…',self._open_principal_approval,'TButton')]:
             button=ttk.Button(actions,text=text,command=command,style=style)
             button.pack(side='left',padx=(0,8)); self.run_buttons.append(button)
+        verify=ttk.Button(card,text='Verify files / verification history…',command=self._open_award_verification)
+        verify.pack(anchor='w',pady=(8,0));self.run_buttons.append(verify)
         ttk.Button(card,text='Open History — latest reports',command=self._open_internal_history).pack(anchor='w',pady=(10,0))
 
     def _update_internal_subject_controls(self):

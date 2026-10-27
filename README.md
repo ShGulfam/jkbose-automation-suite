@@ -675,3 +675,25 @@ The UI shows a determinate progress bar and separate counts for tracked award re
 The read-only Download Excel control now waits for an overlapping success toast to clear; approval/rejection clicks are never automatically retried. An interrupted receipt can be recovered only from a recorded exact submit attempt and intact, complete hashed before/after exports showing that only that request was removed, with every other request unchanged. Mere absence from a queue is insufficient. Unrecoverable uncertainty holds its affected request instead of blocking unrelated eligible awards. Failed GUI runs retain the browser for inspection; use Force Close Browser before starting a new task.
 
 Restart the application to load the update. No live approval or rejection was performed during development or history repair.
+
+
+## Offline award verification
+
+Restart the application, then open **Internal Assessment > Verify files / verification history**. Verification never opens a browser or changes marks, approvals, original PDFs or original workbooks.
+
+Choose class and school academic session. Class is editable (1–12). Existing Class 11/12 Internal Assessment maxima are built in; other classes require explicit subject maxima, such as `English=20; Science=10; Computing=25`. Known subject codes or the exact printed subject name may be used. Pass is 40%. Unsupported subjects and layouts produce a visible issue rather than a passing result. The existing board admit-card and award layouts are supported; choosing another class does not imply arbitrary school document layouts or scanned images can be parsed.
+
+Choose any supported evidence combination:
+- One or more admit-card PDFs with school consolidated awards only.
+- Admit cards with JKBOSE awards only.
+- Admit cards with both sources.
+- School awards versus JKBOSE awards without admit cards.
+- A single award source for internal consistency, identity, maximum and pass checks.
+
+School PDF matrices and XLSX exports are supported, including the automation handoff and Awards_Matrix consistency check. JKBOSE individual request rows and grouped student/subject marks are supported in PDF, XLSX and HTML-style XLS exports. Original binary XLS is not supported. PDFs need searchable text; image-only scans are flagged and no OCR is attempted. Admit-card parts are combined. Each award file is independently checked as a complete snapshot: records from different exports are never silently combined, counted twice or used to fill each other's omissions.
+
+Analysis uses exact registration + exam-roll + subject, with names as a secondary warning. It reports duplicate/conflicting identities, missing or extra student subjects, attendance, wrong maxima, below-pass/over-maximum marks, changed values between sources, and inconsistent workbook views. Botany/Zoology are combined once with valid component limits; Healthcare and IT/ITES are excluded from the required Internal Assessment list. The known school 2025-26 / board report 2026-2027 mapping remains explicit. Without readable admit cards, enrollment completeness is clearly unverified; offline files never prove current portal submission or approval status.
+
+The Analysis tab displays overall counts, per-source and per-subject counts and detailed exceptions. Every completed run retains a PDF, full analysis and checksummed manifest beneath the configured private history's `References/Verification/Class <class> - <session>/<timestamp>-<id>/` (or `Verification/` when no References migration exists). `LATEST.json` points to the latest run. Open older results in the Verification history tab without rerunning sources. **Save PDF as…** copies the saved report to any selected location while preventing overwrite of input evidence or immutable history.
+
+No live award submission, Principal approval/rejection or production portal changes are performed by this feature.
